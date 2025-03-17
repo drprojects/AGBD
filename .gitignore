@@ -2,6 +2,7 @@ __pycache__/
 Models/inference/
 Models/Data
 Models/Logs
+Notebooks
 Patches/example_data/
 Models/pretrained_weights/
 Models/wandb/

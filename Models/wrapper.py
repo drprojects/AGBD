@@ -108,21 +108,26 @@ class Model(pl.LightningModule):
         """
         Calculate the overall validation RMSE and binned metrics.
         """
+        # Log info about the training regime
+        lr = self.trainer.lr_scheduler_configs[0].scheduler.optimizer.param_groups[0]["lr"]
+        self.log_dict({'trainer/learning_rate': lr, "step": self.current_epoch})
 
         # Ordinary validation #####################################################################
 
         # Log the validation epoch's predictions and labels
-        preds = torch.cat(self.val_preds).unsqueeze(1)
-        labels = torch.cat(self.val_labels)
-        val_agbd_rmse = RMSE()(preds, labels)
+        val_preds = torch.cat(self.val_preds).unsqueeze(1)
+        val_labels = torch.cat(self.val_labels)
+        val_agbd_rmse = RMSE()(val_preds, val_labels)
         self.log_dict({'val/agbd_rmse': val_agbd_rmse, "step": self.current_epoch})
 
         # Log the validation agbd rmse by bin
         bins = np.arange(0, 501, 50)
-        for lb,ub in zip(bins[:-1], bins[1:]):
-            pred, label = preds[(lb <= labels) & (labels < ub)], labels[(lb <= labels) & (labels < ub)]
-            rmse = RMSE()(pred, label)
-            self.log_dict({f'binned/val_rmse_{lb}-{ub}': rmse, "step": self.current_epoch})
+        for lb, ub in zip(bins[:-1], bins[1:]):
+            mask = (lb <= val_labels) & (val_labels < ub)
+            bin_preds = val_preds[mask]
+            bin_labels = val_labels[mask]
+            rmse = RMSE()(bin_preds, bin_labels)
+            self.log_dict({f'val/binned/rmse_{lb}-{ub}': rmse, "step": self.current_epoch})
         
         # Set the predictions and labels back to empty lists
         self.val_preds = []
@@ -131,27 +136,40 @@ class Model(pl.LightningModule):
         # Validation on the test set ##############################################################
 
         # Log the test set agbd rmse
-        preds = torch.cat(self.test_preds).unsqueeze(1)
-        labels = torch.cat(self.test_labels)
-        agbd_rmse = RMSE()(preds, labels)
-        self.log_dict({'test/agbd_rmse': agbd_rmse, "step": self.current_epoch})
+        test_preds = torch.cat(self.test_preds).unsqueeze(1)
+        test_labels = torch.cat(self.test_labels)
+        test_agbd_rmse = RMSE()(test_preds, test_labels)
+        self.log_dict({'test/agbd_rmse': test_agbd_rmse, "step": self.current_epoch})
 
         # Log the test set agbd rmse by bin
         bins = np.arange(0, 501, 50)
-        for lb,ub in zip(bins[:-1], bins[1:]):
-            pred, label = preds[(lb <= labels) & (labels < ub)], labels[(lb <= labels) & (labels < ub)]
-            rmse = RMSE()(pred, label)
-            self.log_dict({f'binned/test_rmse_{lb}-{ub}': rmse, "step": self.current_epoch})
+        for lb, ub in zip(bins[:-1], bins[1:]):
+            mask = (lb <= test_labels) & (test_labels < ub)
+            bin_preds = test_preds[mask]
+            bin_labels = test_labels[mask]
+            rmse = RMSE()(bin_preds, bin_labels)
+            self.log_dict({f'test/binned/rmse_{lb}-{ub}': rmse, "step": self.current_epoch})
 
         # Set the predictions and labels back to empty lists
         self.test_labels = []
         self.test_preds = []
 
-        # Keep track of the best overall
+        # Keep track of the performance of the best-so-far model, based
+        # on validation metrics
         if val_agbd_rmse < self.best_val_rmse:
             self.best_val_rmse = val_agbd_rmse
-            self.log_dict({'best_test_rmse': agbd_rmse, "step": self.current_epoch})
-    
+            self.log_dict({'val/best_rmse': val_agbd_rmse, "step": self.current_epoch})
+            self.log_dict({'test/best_rmse': test_agbd_rmse, "step": self.current_epoch})
+
+            # Log the test set agbd rmse by bin
+            bins = np.arange(0, 501, 50)
+            for lb, ub in zip(bins[:-1], bins[1:]):
+                mask = (lb <= test_labels) & (test_labels < ub)
+                bin_preds = test_preds[mask]
+                bin_labels = test_labels[mask]
+                rmse = RMSE()(bin_preds, bin_labels)
+                self.log_dict({f'test/binned/best_rmse_{lb}-{ub}': rmse, "step": self.current_epoch})
+
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.model.parameters(), lr = self.lr)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr = self.lr)
         return [optimizer], [torch.optim.lr_scheduler.StepLR(optimizer, step_size = self.step_size, gamma = self.gamma)]
