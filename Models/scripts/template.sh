@@ -19,7 +19,7 @@ first_part=$(echo "$current_directory" | cut -d'/' -f2)
 user=$(echo "$current_directory" | cut -d'/' -f5)
 
 # Replace this with your wandb project
-entity="AGBD_CR"
+entity="damien_robert"
 
 # Load the necessary files to TMPDIR
 if [ "$first_part" == "cluster" ]; then
@@ -126,7 +126,7 @@ if [ "$first_part" == "cluster" ]
 then
     model_path=/cluster/work/igp_psr/${user}/EcosystemAnalysis/Models/CR_Baseline/${arch}
 else
-    model_path=/scratch2/gsialelli/EcosystemAnalysis/Models/CR_Baseline/${arch}
+    model_path=/home/damien/data/datasets/agbd/models/cr_baseline/${arch}
 fi
 
 num_bands=${#bands[@]}

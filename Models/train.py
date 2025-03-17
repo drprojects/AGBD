@@ -59,7 +59,8 @@ def get_progress_bar():
 
 current_dir = os.getcwd()
 data_dir = os.path.join(current_dir, 'Data') # Path to the Data/ directory
-local_dataset_paths = {'h5': data_dir, 
+log_dir = os.path.join(current_dir, 'Logs') # Path to the Logs/ directory
+local_dataset_paths = {'h5': data_dir,
                     'norm': data_dir, 
                     'map': data_dir,
                     'embeddings': os.path.join(current_dir, 'cat2vec')}
@@ -104,11 +105,11 @@ def main():
     model_name = args.model_name.split('/')[-1]
     if model_name == 'local' :
         # if training locally, give a random wandb name
-        wandb_logger = WandbLogger(entity = args.entity, project = args.arch, log_model = False)
+        wandb_logger = WandbLogger(entity = args.entity, project = args.arch, log_model = False, save_dir=log_dir)
         model_name = wandb_logger.experiment.name
     else:
         # if on the cluster, model_name is the JOB ID and MODEL ID in the ensemble
-        wandb_logger = WandbLogger(entity = args.entity, project = args.arch, name = model_name, log_model = False)
+        wandb_logger = WandbLogger(entity = args.entity, project = args.arch, name = model_name, log_model = False, save_dir=log_dir)
 
     # Define the trainer
     trainer = Trainer(max_epochs = args.n_epochs, devices = 1, accelerator = accelerator, logger = wandb_logger, num_sanity_val_steps = 1, val_check_interval = 0.5,

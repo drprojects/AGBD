@@ -54,7 +54,7 @@ def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5) :
     idx = {}
     for fname in fnames :
         idx[fname] = {}
-        
+
         with h5py.File(join(path_h5, fname), 'r') as f:
             
             # Get the tiles in this file which belong to the mode
@@ -487,7 +487,7 @@ class GEDIDataset(Dataset):
             else: s2_boa_offset = 0
 
             # Get the surface reflectance values
-            sr_bands = (s2_bands - s2_boa_offset * 1000) / 10000
+            sr_bands = (s2_bands - s2_boa_offset.astype('float32') * 1000) / 10000
             sr_bands[s2_bands == 0] = 0
             sr_bands[sr_bands < 0] = 0
             s2_bands = sr_bands
