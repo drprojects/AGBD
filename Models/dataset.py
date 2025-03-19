@@ -9,19 +9,19 @@ This script defines the dataset class for the GEDI dataset.
 
 import h5py
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import numpy as np
-from os.path import join
 import pickle
 from os.path import join, exists
 from datetime import datetime, timedelta
-import argparse
-np.seterr(divide = 'ignore') 
-import tqdm
+from astropy.time import Time
+from astropy.coordinates import get_sun, EarthLocation, AltAz
+from astropy import units
+np.seterr(divide = 'ignore')
 import pandas as pd
 
 # Define the nodata values for each data source
-NODATAVALS = {'S2_bands' : 0, 'CH': 255, 'ALOS_bands': 0, 'DEM': -9999, 'LC': 255}
+NODATAVALS = {'S2_bands': 0, 'CH': 255, 'ALOS_bands': 0, 'DEM': -9999, 'LC': 255}
 
 # Define the biomes
 REF_BIOMES = {20: 'Shrubs', 30: 'Herbaceous vegetation', 40: 'Cultivated', 90: 'Herbaceous wetland', 111: 'Closed-ENL', 112: 'Closed-EBL', 114: 'Closed-DBL', 115: 'Closed-mixed', 116: 'Closed-other', 121: 'Open-ENL', 122: 'Open-EBL', 124: 'Open-DBL', 125: 'Open-mixed', 126: 'Open-other'}
@@ -29,7 +29,7 @@ REF_BIOMES = {20: 'Shrubs', 30: 'Herbaceous vegetation', 40: 'Cultivated', 90: '
 ############################################################################################################################
 # Helper functions
 
-def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5) :
+def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5):
     """
     This function creates the index for the dataset. The index is a dictionary which maps the file
     names (`fnames`) to the tiles that are in the `mode` (train, val, test); and the tiles to the
@@ -52,7 +52,7 @@ def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5) :
 
     # Iterate over all files
     idx = {}
-    for fname in fnames :
+    for fname in fnames:
         idx[fname] = {}
 
         with h5py.File(join(path_h5, fname), 'r') as f:
@@ -62,7 +62,7 @@ def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5) :
             tiles = np.intersect1d(all_tiles, tile_mapping[mode])
             
             # Iterate over the tiles
-            for tile in tiles :
+            for tile in tiles:
 
                 # Get the number of patches in the tile
                 n_patches = len(f[tile]['GEDI']['agbd'])
@@ -102,7 +102,7 @@ def find_index_for_chunk(index, n, total_length):
             cumulative_sum += num_rows
 
 
-def encode_lat_lon(lat, lon) :
+def encode_lat_lon(lat, lon):
     """
     Encode the latitude and longitude into sin/cosine values. We use a simple WRAP positional encoding, as 
     Mac Aodha et al. (2019).
@@ -127,7 +127,7 @@ def encode_lat_lon(lat, lon) :
     return lat_cos, lat_sin, lon_cos, lon_sin
 
 
-def encode_coords(central_lat, central_lon, patch_size, resolution = 10) :
+def encode_coords(central_lat, central_lon, patch_size, resolution = 10):
     """ 
     This function computes the latitude and longitude of a patch, from the latitude and longitude of its central pixel.
     It then encodes these values into sin/cosine values, and scales the results to [0,1].
@@ -162,7 +162,7 @@ def encode_coords(central_lat, central_lon, patch_size, resolution = 10) :
     return lat_cos, lat_sin, lon_cos, lon_sin
 
 
-def get_doy(num_days, patch_size, GEDI_START_MISSION = '2019-04-17') :
+def get_doy(num_days, patch_size, GEDI_START_MISSION = '2019-04-17'):
     """
     For a given number of days before/since the start of the GEDI mission, this function calculates
     the day of year (number between 1 and 365) and encodes it into sin/cosine values.
@@ -172,7 +172,7 @@ def get_doy(num_days, patch_size, GEDI_START_MISSION = '2019-04-17') :
     - GEDI_START_MISSION (str): the start date of the GEDI mission
 
     Returns:
-    - (doy_cos, doy_sin) (tuple): the sin/cosine values for the day of year (doy_cos, doy_sin
+    - (doy_cos, doy_sin, date) (tuple): the sin/cosine values for the day of year as well as the absolute datetime date
     """
 
     # Get the date of acquisition and day of year
@@ -187,17 +187,60 @@ def get_doy(num_days, patch_size, GEDI_START_MISSION = '2019-04-17') :
     # Now we put everything in the [0,1] range
     doy_cos, doy_sin = (doy_cos + 1) / 2, (doy_sin + 1) / 2
 
-    return np.full((patch_size[0], patch_size[1]), doy_cos), np.full((patch_size[0], patch_size[1]), doy_sin)
+    return np.full((patch_size[0], patch_size[1]), doy_cos), np.full((patch_size[0], patch_size[1]), doy_sin), target_date
 
 
-def func_slope(px, py) :
+def get_sun_position(
+        lat: float,
+        lon: float,
+        date: str,
+        utc_time: str,
+        encode_azimuth: bool = True,
+        encode_altitude: bool = True):
+    """Compute the azimuth and elevation angles of the sun given a
+    latitude, longitude, date, and time.
+
+    Args:
+    - lat (float):
+        latitude
+    - lon (float):
+        longitude
+    - date (str):
+        date in "%Y-%m-%d" format
+    - utc_time (str):
+        time expressed in UTC-0/GMT-0 in "%H:%M:%S" format
+    - encode_azimuth (bool):
+        whether the azimuth should be returned as a sine-cosine tuple or
+        as a scalar in [0°, 360°]
+    - encode_altitude (bool):
+        whether the altitude should be returned as a scalar in [0, 1] or
+        as a scalar in [0°, 90°]
+
+    Returns:
+    - (azimuth, altitude) (tuple)
+    """
+    time = Time(f"{date} {utc_time}", scale="utc")
+    location = EarthLocation(lat=lat * units.deg, lon=lon * units.deg)
+    altaz = AltAz(obstime=time, location=location)
+    sun = get_sun(time).transform_to(altaz)
+
+    azimuth = (np.cos(sun.az.rad), np.sin(sun.az.rad)) if encode_azimuth \
+        else sun.az.deg
+    altitude = sun.alt.deg / 90 if encode_altitude else sun.alt.deg
+
+    return azimuth, altitude
+
+
+def func_slope(px, py):
     return np.sqrt(px ** 2 + py ** 2)
 
-def func_aspect(px, py) :
+
+def func_aspect(px, py):
     aspect = np.pi / 2 - np.arctan2(py, px)
     return np.where(aspect < 0, aspect + 2 * np.pi, aspect)
 
-def get_topology(dem) :
+
+def get_topology(dem):
     """
     This function computes the slope and aspect of the DEM.
     
@@ -229,7 +272,7 @@ def get_topology(dem) :
     return slope, aspect_cos, aspect_sin
 
 
-def normalize_data(data, norm_values, norm_strat, nodata_value = None) :
+def normalize_data(data, norm_values, norm_strat, nodata_value = None):
     """
     Normalize the data, according to various strategies:
     - mean_std: subtract the mean and divide by the standard deviation
@@ -245,23 +288,23 @@ def normalize_data(data, norm_values, norm_strat, nodata_value = None) :
     - normalized_data (np.array): the normalized data
     """
 
-    if norm_strat == 'mean_std' :
+    if norm_strat == 'mean_std':
         mean, std = norm_values['mean'], norm_values['std']
-        if nodata_value is not None :
+        if nodata_value is not None:
             data = np.where(data == nodata_value, 0, (data - mean) / std)
-        else : data = (data - mean) / std
+        else: data = (data - mean) / std
 
-    elif norm_strat == 'pct' :
+    elif norm_strat == 'pct':
         p1, p99 = norm_values['p1'], norm_values['p99']
-        if nodata_value is not None :
+        if nodata_value is not None:
             data = np.where(data == nodata_value, 0, (data - p1) / (p99 - p1))
-        else :
+        else:
             data = (data - p1) / (p99 - p1)
         data = np.clip(data, 0, 1)
 
-    elif norm_strat == 'min_max' :
+    elif norm_strat == 'min_max':
         min_val, max_val = norm_values['min'], norm_values['max']
-        if nodata_value is not None :
+        if nodata_value is not None:
             data = np.where(data == nodata_value, 0, (data - min_val) / (max_val - min_val))
         else:
             data = (data - min_val) / (max_val - min_val)
@@ -272,7 +315,7 @@ def normalize_data(data, norm_values, norm_strat, nodata_value = None) :
     return data
 
 
-def normalize_bands(bands_data, norm_values, order, norm_strat, nodata_value = None) :
+def normalize_bands(bands_data, norm_values, order, norm_strat, nodata_value = None):
     """
     This function normalizes the bands data using the normalization values and strategy.
 
@@ -287,14 +330,14 @@ def normalize_bands(bands_data, norm_values, order, norm_strat, nodata_value = N
     - bands_data (np.array): the normalized bands data
     """
     
-    for i, band in enumerate(order) :
+    for i, band in enumerate(order):
         band_norm = norm_values[band]
         bands_data[:, :, i] = normalize_data(bands_data[:, :, i], band_norm, norm_strat, nodata_value)
     
     return bands_data
 
 
-def encode_lc(lc_data) :
+def encode_lc(lc_data):
     """
     Encode the land cover classes into sin/cosine values and scale the class probabilities to [0,1].
 
@@ -321,7 +364,7 @@ def encode_lc(lc_data) :
     return lc_cos, lc_sin, lc_prob
 
 
-def embed_lc(lc_data, embeddings) :
+def embed_lc(lc_data, embeddings):
     """
     Embed the land cover classes using the cat2vec embeddings.
 
@@ -346,7 +389,7 @@ def embed_lc(lc_data, embeddings) :
 
 
 _biome_values_mapping = {v: i for i, v in enumerate(REF_BIOMES.keys())}
-def onehot_lc(lc_data) :
+def onehot_lc(lc_data):
     """
     Encode the land cover classes using one-hot encoding.
 
@@ -359,7 +402,7 @@ def onehot_lc(lc_data) :
     # Number of classes
     num_classes = len(_biome_values_mapping)
     # Actually perform the one-hot encoding
-    def one_hot(x) :
+    def one_hot(x):
         one_hot = np.zeros(num_classes)
         one_hot[_biome_values_mapping.get(x, 0)] = 1
         return one_hot
@@ -368,7 +411,7 @@ def onehot_lc(lc_data) :
 
 
 _ref_biome_values = [v for v in REF_BIOMES.keys()]
-def biome_distribution(patch_lc) :
+def biome_distribution(patch_lc):
     """
     This function computes the distribution of biomes in a patch.
 
@@ -390,15 +433,19 @@ class GEDIDataset(Dataset):
     def __init__(self, paths, years, chunk_size, mode, args, version = 4, debug = False):
 
         # Get the parameters
-        self.h5_path, self.norm_path, self.mapping, self.embed_path = paths['h5'], paths['norm'], paths['map'], paths['embeddings']
+        self.h5_path = paths['h5']
+        self.norm_path = paths['norm']
+        self.mapping = paths['map']
+        self.embed_path = paths['embeddings']
+        self.s2_tile_to_dates_path = paths['s2_tile_to_dates']
         self.mode = mode
         self.chunk_size = chunk_size
         self.years = years
         
         # Get the file names
         self.fnames = []
-        for year in self.years : 
-            if debug : self.fnames += [f'data_subset-{year}-v{version}_{i}-20.h5' for i in range(2)]
+        for year in self.years: 
+            if debug: self.fnames += [f'data_subset-{year}-v{version}_{i}-20.h5' for i in range(2)]
             else: self.fnames += [f'data_subset-{year}-v{version}_{i}-20.h5' for i in range(20)]
         
         # Initialize the index
@@ -419,6 +466,7 @@ class GEDIDataset(Dataset):
         self.s2_dates = args.s2_dates
         self.s2_day = args.s2_day
         self.s2_doy = args.s2_doy
+        self.s2_sun = args.s2_sun
         self.topo = args.topo
         self.aspect = args.aspect
         self.slope = args.slope
@@ -440,13 +488,18 @@ class GEDIDataset(Dataset):
         # Open the file handles
         self.handles = {fname: h5py.File(join(self.h5_path, fname), 'r') for fname in self.index.keys()}
 
+        # Read the dictionary mapping S2 tiles and acquisition dates to
+        # UTC times. This will be used for recovering the sun position
+        self.s2_tile_to_dates = pickle.load(open(
+            join(self.s2_tile_to_dates_path, "s2_tile_to_dates.pkl"), 'rb'))
+
         # Define the window size
         assert self.patch_size[0] == self.patch_size[1], "The patch size must be square"
         self.center = 12 # because the patch size is 25x25 in the .h5 files
         self.window_size = self.patch_size[0] // 2
 
         # Get the cat2vec LC embeddings
-        if self.lc and self.cat2vec :
+        if self.lc and self.cat2vec:
             embeddings = pd.read_csv(join(self.embed_path, "embeddings_train.csv"))
             embeddings = dict([(v,np.array([a,b,c,d,e])) for v, a,b,c,d,e in zip(embeddings.mapping, embeddings.dim0, embeddings.dim1, embeddings.dim2, embeddings.dim3, embeddings.dim4)])
             self.embeddings = embeddings
@@ -463,26 +516,48 @@ class GEDIDataset(Dataset):
         f = self.handles[file_name]
 
         # Set the order and indices for the Sentinel-2 bands
-        if not hasattr(self, 's2_order') : self.s2_order = list(f[tile_name]['S2_bands'].attrs['order'])
-        if not hasattr(self, 's2_indices') : self.s2_indices = [self.s2_order.index(band) for band in self.bands]
+        if not hasattr(self, 's2_order'): self.s2_order = list(f[tile_name]['S2_bands'].attrs['order'])
+        if not hasattr(self, 's2_indices'): self.s2_indices = [self.s2_order.index(band) for band in self.bands]
 
         # Set the order for the Sentinel-1 bands
-        if self.s1 and not hasattr(self, 's1_order') : self.s1_order = f[tile_name]['S1_bands'].attrs['order']
+        if self.s1 and not hasattr(self, 's1_order'): self.s1_order = f[tile_name]['S1_bands'].attrs['order']
 
         # Set the order for the ALOS bands
-        if self.alos and not hasattr(self, 'alos_order') : self.alos_order = f[tile_name]['ALOS_bands'].attrs['order']
+        if self.alos and not hasattr(self, 'alos_order'): self.alos_order = f[tile_name]['ALOS_bands'].attrs['order']
 
         # Initialize the data list
         data = []
 
+        # Latitude and longitude data
+        lat_offset, lat_decimal = f[tile_name]['GEDI']['lat_offset'][idx], f[tile_name]['GEDI']['lat_decimal'][idx]
+        lon_offset, lon_decimal = f[tile_name]['GEDI']['lon_offset'][idx], f[tile_name]['GEDI']['lon_decimal'][idx]
+        lat = np.sign(lat_decimal) * (np.abs(lat_decimal) + lat_offset)
+        lon = np.sign(lon_decimal) * (np.abs(lon_decimal) + lon_offset)
+        lat_cos, lat_sin, lon_cos, lon_sin = encode_coords(lat, lon, self.patch_size)
+        if self.latlon:
+            data.extend([lat_cos[..., np.newaxis], lat_sin[..., np.newaxis], lon_cos[..., np.newaxis],
+                         lon_sin[..., np.newaxis]])
+        else:
+            data.extend([lat_cos[..., np.newaxis], lat_sin[..., np.newaxis]])
+
+        # GEDI dates
+        gedi_num_days = f[tile_name]['GEDI']['date'][idx]
+
+        if self.gedi_dates:
+            gedi_doy_cos, gedi_doy_sin, gedi_date = get_doy(gedi_num_days, self.patch_size)
+            gedi_num_days = np.full((self.patch_size[0], self.patch_size[1]), gedi_num_days).astype(np.float32)
+            gedi_num_days = normalize_data(gedi_num_days, self.norm_values['GEDI']['date'],
+                                           'min_max' if self.norm_strat == 'pct' else self.norm_strat)
+            data.extend([gedi_num_days[..., np.newaxis], gedi_doy_cos[..., np.newaxis], gedi_doy_sin[..., np.newaxis]])
+
         # Sentinel-2 bands
-        if self.bands != [] :
+        if self.bands != []:
             
             # Get the bands
-            s2_bands = f[tile_name]['S2_bands'][idx, self.center - self.window_size : self.center + self.window_size + 1, self.center - self.window_size : self.center + self.window_size + 1, :].astype(np.float32)
+            s2_bands = f[tile_name]['S2_bands'][idx, self.center - self.window_size: self.center + self.window_size + 1, self.center - self.window_size: self.center + self.window_size + 1, :].astype(np.float32)
             
             # Get the BOA offset, if it exists
-            if 'S2_boa_offset' in f[tile_name]['Sentinel_metadata'].keys() : 
+            if 'S2_boa_offset' in f[tile_name]['Sentinel_metadata'].keys(): 
                 s2_boa_offset = f[tile_name]['Sentinel_metadata']['S2_boa_offset'][idx]
             else: s2_boa_offset = 0
 
@@ -498,51 +573,61 @@ class GEDIDataset(Dataset):
             data.extend([s2_bands])
             
             # Sentinel-2 date
-            s2_num_days = f[tile_name]['Sentinel_metadata']['S2_date'][idx]
-            if self.s2_dates : 
-                s2_doy_cos, s2_doy_sin = get_doy(s2_num_days, self.patch_size)
-                s2_num_days = np.full((self.patch_size[0], self.patch_size[1]), s2_num_days).astype(np.float32)
-                s2_num_days = normalize_data(s2_num_days, self.norm_values['Sentinel_metadata']['S2_date'], 'min_max' if self.norm_strat == 'pct' else self.norm_strat)
+            if self.s2_dates:
+                s2_num_days = f[tile_name]['Sentinel_metadata']['S2_date'][idx]
+                s2_doy_cos, s2_doy_sin, s2_date = get_doy(s2_num_days, self.patch_size)
                 if self.s2_day:
+                    s2_num_days = np.full(
+                        (self.patch_size[0], self.patch_size[1]),
+                        s2_num_days).astype(np.float32)
+                    s2_num_days = normalize_data(
+                        s2_num_days,
+                        self.norm_values['Sentinel_metadata']['S2_date'],
+                        'min_max' if self.norm_strat == 'pct' else self.norm_strat)
                     data.extend([s2_num_days[..., np.newaxis]])
                 if self.s2_doy:
                     data.extend([s2_doy_cos[..., np.newaxis], s2_doy_sin[..., np.newaxis]])
-            
+                if self.s2_sun:
+                    utc_time = self.s2_tile_to_dates[tile_name][s2_date.strftime("%Y%m%d")]
+                    utc_time = datetime.strptime(utc_time, "%H%M%S").strftime("%H:%M:%S")
+                    azimuth, altitude = get_sun_position(
+                        lat,
+                        lon,
+                        s2_date.strftime("%Y-%m-%d"),
+                        utc_time,
+                        encode_azimuth=True,
+                        encode_altitude=True)
+                    az_cos_patch = np.full(
+                        (self.patch_size[0], self.patch_size[1]),
+                        azimuth[0]).astype(np.float32)
+                    az_sin_patch = np.full(
+                        (self.patch_size[0], self.patch_size[1]),
+                        azimuth[1]).astype(np.float32)
+                    alt_patch = np.full(
+                        (self.patch_size[0], self.patch_size[1]),
+                        altitude).astype(np.float32)
+                    data.extend([
+                        az_cos_patch[..., np.newaxis],
+                        az_sin_patch[..., np.newaxis],
+                        alt_patch[..., np.newaxis]])
+
         # Sentinel-1 bands
         if self.s1:
-            s1_bands = f[tile_name]['S1_bands'][idx, self.center - self.window_size : self.center + self.window_size + 1, self.center - self.window_size : self.center + self.window_size + 1, :].astype(np.float32)
+            s1_bands = f[tile_name]['S1_bands'][idx, self.center - self.window_size: self.center + self.window_size + 1, self.center - self.window_size: self.center + self.window_size + 1, :].astype(np.float32)
             s1_bands = normalize_bands(s1_bands, self.norm_values['S1_bands'], self.s1_order, self.norm_strat)
             
             s1_num_days = f[tile_name]['Sentinel_metadata']['S1_date'][idx, :]
-            s1_doy_cos, s1_doy_sin = get_doy(s1_num_days, self.patch_size)
+            s1_doy_cos, s1_doy_sin, s1_date = get_doy(s1_num_days, self.patch_size)
             s1_num_days = np.full((self.patch_size[0], self.patch_size[1]), s1_num_days).astype(np.float32)
             s1_num_days = normalize_data(s1_num_days, self.norm_values['Sentinel_metadata']['S1_date'], 'min_max' if self.norm_strat == 'pct' else self.norm_strat)
             
             data.extend([s1_bands, s1_num_days[..., np.newaxis], s1_doy_cos[..., np.newaxis], s1_doy_sin[..., np.newaxis]])
-        
-        # Latitude and longitude data
-        lat_offset, lat_decimal = f[tile_name]['GEDI']['lat_offset'][idx], f[tile_name]['GEDI']['lat_decimal'][idx]
-        lon_offset, lon_decimal = f[tile_name]['GEDI']['lon_offset'][idx], f[tile_name]['GEDI']['lon_decimal'][idx]
-        lat = np.sign(lat_decimal) * (np.abs(lat_decimal) + lat_offset)
-        lon = np.sign(lon_decimal) * (np.abs(lon_decimal) + lon_offset)
-        lat_cos, lat_sin, lon_cos, lon_sin = encode_coords(lat, lon, self.patch_size)
-        if self.latlon : data.extend([lat_cos[..., np.newaxis], lat_sin[..., np.newaxis], lon_cos[..., np.newaxis], lon_sin[..., np.newaxis]])
-        else: data.extend([lat_cos[..., np.newaxis], lat_sin[..., np.newaxis]])
-        
-        # GEDI dates
-        gedi_num_days = f[tile_name]['GEDI']['date'][idx]
-
-        if self.gedi_dates :
-            gedi_doy_cos, gedi_doy_sin = get_doy(gedi_num_days, self.patch_size)
-            gedi_num_days = np.full((self.patch_size[0], self.patch_size[1]), gedi_num_days).astype(np.float32)
-            gedi_num_days = normalize_data(gedi_num_days, self.norm_values['GEDI']['date'], 'min_max' if self.norm_strat == 'pct' else self.norm_strat)
-            data.extend([gedi_num_days[..., np.newaxis], gedi_doy_cos[..., np.newaxis], gedi_doy_sin[..., np.newaxis]])
 
         # ALOS bands
         if self.alos:
 
             # Get the bands
-            alos_bands = f[tile_name]['ALOS_bands'][idx, self.center - self.window_size : self.center + self.window_size + 1, self.center - self.window_size : self.center + self.window_size + 1, :].astype(np.float32)
+            alos_bands = f[tile_name]['ALOS_bands'][idx, self.center - self.window_size: self.center + self.window_size + 1, self.center - self.window_size: self.center + self.window_size + 1, :].astype(np.float32)
 
             # Get the gamma naught values
             alos_bands = np.where(alos_bands == NODATAVALS['ALOS_bands'], -9999.0, 10 * np.log10(np.power(alos_bands.astype(np.float32), 2)) - 83.0)
@@ -554,17 +639,17 @@ class GEDIDataset(Dataset):
         
         # CH data
         if self.ch:
-            ch = f[tile_name]['CH']['ch'][idx, self.center - self.window_size : self.center + self.window_size + 1, self.center - self.window_size : self.center + self.window_size + 1]
+            ch = f[tile_name]['CH']['ch'][idx, self.center - self.window_size: self.center + self.window_size + 1, self.center - self.window_size: self.center + self.window_size + 1]
             ch = normalize_data(ch, self.norm_values['CH']['ch'], self.norm_strat, NODATAVALS['CH'])
             
-            ch_std = f[tile_name]['CH']['std'][idx, self.center - self.window_size : self.center + self.window_size + 1, self.center - self.window_size : self.center + self.window_size + 1]
+            ch_std = f[tile_name]['CH']['std'][idx, self.center - self.window_size: self.center + self.window_size + 1, self.center - self.window_size: self.center + self.window_size + 1]
             ch_std = normalize_data(ch_std, self.norm_values['CH']['std'], self.norm_strat, NODATAVALS['CH'])
 
             data.extend([ch[..., np.newaxis], ch_std[..., np.newaxis]])
         
         # LC data
         if self.lc:
-            lc = f[tile_name]['LC'][idx, self.center - self.window_size : self.center + self.window_size + 1, self.center - self.window_size : self.center + self.window_size + 1, :]
+            lc = f[tile_name]['LC'][idx, self.center - self.window_size: self.center + self.window_size + 1, self.center - self.window_size: self.center + self.window_size + 1, :]
             
             if self.cat2vec: # cat2vec embeddings, 5dim
                 lc, lc_prob = embed_lc(lc, self.embeddings)
@@ -589,12 +674,12 @@ class GEDIDataset(Dataset):
         
         # DEM data
         if self.dem:
-            dem = f[tile_name]['DEM'][idx, self.center - self.window_size : self.center + self.window_size + 1, self.center - self.window_size : self.center + self.window_size + 1]
+            dem = f[tile_name]['DEM'][idx, self.center - self.window_size: self.center + self.window_size + 1, self.center - self.window_size: self.center + self.window_size + 1]
 
-            if self.topo :
+            if self.topo:
                 # Get the slope and aspect
                 slope, aspect_cos, aspect_sin = get_topology(dem)
-                if self.slope :
+                if self.slope:
                     data.extend([slope[..., np.newaxis]])
                 if self.aspect:
                     data.extend([aspect_cos[..., np.newaxis], aspect_sin[..., np.newaxis]])
@@ -607,7 +692,7 @@ class GEDIDataset(Dataset):
 
         # Get the GEDI target data
         agbd = f[tile_name]['GEDI']['agbd'][idx]
-        if self.norm_target :
+        if self.norm_target:
             agbd = normalize_data(agbd, self.norm_values['GEDI']['agbd'], self.norm_strat)
         agbd = torch.from_numpy(np.array(agbd, dtype = np.float32)).to(torch.float)
 

@@ -60,10 +60,12 @@ def get_progress_bar():
 current_dir = os.getcwd()
 data_dir = os.path.join(current_dir, 'Data') # Path to the Data/ directory
 log_dir = os.path.join(current_dir, 'Logs') # Path to the Logs/ directory
-local_dataset_paths = {'h5': data_dir,
-                    'norm': data_dir, 
-                    'map': data_dir,
-                    'embeddings': os.path.join(current_dir, 'cat2vec')}
+local_dataset_paths = {
+    'h5': data_dir,
+    'norm': data_dir,
+    'map': data_dir,
+    'embeddings': os.path.join(current_dir, 'cat2vec'),
+    's2_tile_to_dates': data_dir}
 
 def main():
     

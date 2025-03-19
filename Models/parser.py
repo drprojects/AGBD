@@ -71,6 +71,7 @@ def setup_parser():
     parser.add_argument("--s2_dates", type = str2bool, default = 'false', help = 'Whether to include the S2 date and DOY in the input.')
     parser.add_argument("--s2_day", type = str2bool, default = 'false', help = 'Whether to include the S2 date in the input.')
     parser.add_argument("--s2_doy", type = str2bool, default = 'false', help = 'Whether to include the S2 DOY in the input.')
+    parser.add_argument("--s2_sun", type = str2bool, default = 'false', help = 'Whether to include the S2 sun position in the input.')
     parser.add_argument("--topo", type = str2bool, default = 'false', help = 'Whether to include more topological information (slope and aspect).')
     parser.add_argument("--aspect", type = str2bool, default = 'false', help = 'Whether to include the aspect.')
     parser.add_argument("--slope", type = str2bool, default = 'false', help = 'Whether to include the slope.')

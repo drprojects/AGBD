@@ -27,12 +27,12 @@ def construct_feature_names(args) :
     - feature_names : list : the feature names
     """
     feature_names = []
-    feature_names += args.bands
-    if args.s2_dates : feature_names += ['s2_num_days', 's2_doy_cos', 's2_doy_sin']
-    if args.s1 : feature_names += ['s1_vv', 's1_vh', 's1_num_days', 's1_doy_cos', 's1_doy_sin']
     if args.latlon : feature_names += ['lat_cos', 'lat_sin', 'lon_cos', 'lon_sin']
     else: feature_names += ['lat_cos', 'lat_sin']
     if args.gedi_dates : feature_names += ['gedi_num_days', 'gedi_doy_cos', 'gedi_doy_sin']
+    feature_names += args.bands
+    if args.s2_dates : feature_names += ['s2_num_days', 's2_doy_cos', 's2_doy_sin', 's2_sun_az_cos', 's2_sun_az_sin', 's2_sun_alt']
+    if args.s1 : feature_names += ['s1_vv', 's1_vh', 's1_num_days', 's1_doy_cos', 's1_doy_sin']
     if args.alos : feature_names += ['alos_hh', 'alos_hv']
     if args.ch : feature_names += ['ch', 'ch_std']
     if args.lc : feature_names += ['lc_cos', 'lc_sin', 'lc_prob']
