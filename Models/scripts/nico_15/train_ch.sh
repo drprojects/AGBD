@@ -127,7 +127,7 @@ if [ "$first_part" == "cluster" ]
 then
     model_path=/cluster/work/igp_psr/${user}/EcosystemAnalysis/Models/CR_Baseline/${arch}
 else
-    model_path=/home/damien/data/datasets/agbd/models/cr_baseline/${arch}
+    model_path=~/projects/AGBD/Models/Logs/models/cr_baseline/${arch}
 fi
 
 num_bands=${#bands[@]}
