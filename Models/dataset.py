@@ -19,12 +19,16 @@ from astropy.coordinates import get_sun, EarthLocation, AltAz
 from astropy import units
 np.seterr(divide = 'ignore')
 import pandas as pd
+from tqdm import tqdm
 
 # Define the nodata values for each data source
 NODATAVALS = {'S2_bands': 0, 'CH': 255, 'ALOS_bands': 0, 'DEM': -9999, 'LC': 255}
 
 # Define the biomes
 REF_BIOMES = {20: 'Shrubs', 30: 'Herbaceous vegetation', 40: 'Cultivated', 90: 'Herbaceous wetland', 111: 'Closed-ENL', 112: 'Closed-EBL', 114: 'Closed-DBL', 115: 'Closed-mixed', 116: 'Closed-other', 121: 'Open-ENL', 122: 'Open-EBL', 124: 'Open-DBL', 125: 'Open-mixed', 126: 'Open-other'}
+
+# Define the start date of the GEDI mission
+GEDI_START_MISSION = '2019-04-17'
 
 ############################################################################################################################
 # Helper functions
@@ -60,14 +64,14 @@ def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5):
             # Get the tiles in this file which belong to the mode
             all_tiles = list(f.keys())
             tiles = np.intersect1d(all_tiles, tile_mapping[mode])
-            
+
             # Iterate over the tiles
             for tile in tiles:
 
                 # Get the number of patches in the tile
                 n_patches = len(f[tile]['GEDI']['agbd'])
                 idx[fname][tile] = n_patches // chunk_size
-    
+
     total_length = sum(sum(v for v in d.values()) for d in idx.values())
 
     return idx, total_length
@@ -162,14 +166,13 @@ def encode_coords(central_lat, central_lon, patch_size, resolution = 10):
     return lat_cos, lat_sin, lon_cos, lon_sin
 
 
-def get_doy(num_days, patch_size, GEDI_START_MISSION = '2019-04-17'):
+def get_doy(num_days, patch_size):
     """
     For a given number of days before/since the start of the GEDI mission, this function calculates
     the day of year (number between 1 and 365) and encodes it into sin/cosine values.
 
     Args:
     - num_days (int): the number of days before/since the start of the GEDI mission
-    - GEDI_START_MISSION (str): the start date of the GEDI mission
 
     Returns:
     - (doy_cos, doy_sin, date) (tuple): the sin/cosine values for the day of year as well as the absolute datetime date
@@ -193,35 +196,36 @@ def get_doy(num_days, patch_size, GEDI_START_MISSION = '2019-04-17'):
 def get_sun_position(
         lat: float,
         lon: float,
-        date: str,
-        utc_time: str,
+        dates: str,
+        utc_times: str,
         encode_azimuth: bool = True,
         encode_altitude: bool = True):
-    """Compute the azimuth and elevation angles of the sun given a
-    latitude, longitude, date, and time.
+    """
+    Compute Sun azimuth and elevation for vectorized input.
 
     Args:
-    - lat (float):
-        latitude
-    - lon (float):
-        longitude
-    - date (str):
-        date in "%Y-%m-%d" format
-    - utc_time (str):
-        time expressed in UTC-0/GMT-0 in "%H:%M:%S" format
-    - encode_azimuth (bool):
-        whether the azimuth should be returned as a sine-cosine tuple or
-        as a scalar in [0°, 360°]
-    - encode_altitude (bool):
-        whether the altitude should be returned as a scalar in [0, 1] or
-        as a scalar in [0°, 90°]
+        lat (array): Array of latitudes.
+        lon (array): Array of longitudes.
+        dates (array): Array of date strings (YYYY-MM-DD).
+        utc_times (array): Array of UTC time strings (HH:MM:SS).
 
     Returns:
-    - (azimuth, altitude) (tuple)
+        tuple: (azimuths, altitudes) in degrees.
     """
-    time = Time(f"{date} {utc_time}", scale="utc")
+    # Combine date and time into ISO format (YYYY-MM-DDTHH:MM:SS)
+    datetime_strings = np.char.add(dates, "T")
+    datetime_strings = np.char.add(datetime_strings, utc_times)
+
+    # Convert to astropy Time object
+    time = Time(datetime_strings, scale="utc")
+
+    # Define observer location (broadcasting ensures shape match)
     location = EarthLocation(lat=lat * units.deg, lon=lon * units.deg)
+
+    # Define AltAz frame
     altaz = AltAz(obstime=time, location=location)
+
+    # Compute the Sun's position
     sun = get_sun(time).transform_to(altaz)
 
     azimuth = (np.cos(sun.az.rad), np.sin(sun.az.rad)) if encode_azimuth \
@@ -229,6 +233,92 @@ def get_sun_position(
     altitude = sun.alt.deg / 90 if encode_altitude else sun.alt.deg
 
     return azimuth, altitude
+
+
+def add_s2_sun_position_to_h5(
+        h5_file_path: str,
+        s2_tile_to_dates: dict,
+        overwrite: bool = False,
+        verbose: bool = True):
+    """Add the Sentinel-2 UTC acquisition time and corresponding sun
+    position for each GEDI location to an already-existing AGBD HDF5
+    file.
+
+    Args:
+    - h5_file_path (str): Path to the AGBD HDF5 file to extend
+    - s2_tile_to_dates (dict): Dictionary mapping S2 tiles and
+        acquisition dates to the corresponding UTC times
+    - overwrite (bool): Whether the UTC times and sun position
+        information should be overwritten, if already found in the HDF5
+    - verbose (bool): Verbosity
+    """
+    with (h5py.File(h5_file_path, 'r+') as f):
+        enum = f.keys()
+        if verbose:
+            print(f"Processing S2 sun positions for: {h5_file_path}")
+            enum = tqdm(f.keys())
+        for tile_name in enum:
+
+            # Some of the HDF5 files have tiles with no data. Skip those
+            if len(f[tile_name]['GEDI']['lat_offset']) == 0:
+                continue
+
+            # Latitude and longitude data
+            lat_offset = f[tile_name]['GEDI']['lat_offset'][:]
+            lat_decimal = f[tile_name]['GEDI']['lat_decimal'][:]
+            lon_offset = f[tile_name]['GEDI']['lon_offset'][:]
+            lon_decimal = f[tile_name]['GEDI']['lon_decimal'][:]
+            lat = np.sign(lat_decimal) * (np.abs(lat_decimal) + lat_offset)
+            lon = np.sign(lon_decimal) * (np.abs(lon_decimal) + lon_offset)
+
+            # Compute absolute S2 dates in parallel
+            s2_num_days = f[tile_name]['Sentinel_metadata']['S2_date'][:]
+            gedi_start = np.datetime64(GEDI_START_MISSION)
+            s2_dates = gedi_start + s2_num_days.astype('timedelta64[D]')
+            s2_dates_str = np.datetime_as_string(s2_dates, unit='D').astype('U10')
+            s2_dates_str = np.char.replace(s2_dates_str, '-', '')
+
+            # Vectorized lookup for UTC times
+            func = lambda date: datetime.strptime(
+                s2_tile_to_dates[tile_name][date], "%H%M%S").strftime("%H:%M:%S")
+            utc_times = np.vectorize(func)(s2_dates_str)
+
+            # Convert S2 dates format for get_sun_position
+            func = lambda date: datetime.strptime(date, "%Y%m%d").strftime(
+                "%Y-%m-%d")
+            s2_dates = np.vectorize(func)(s2_dates_str)
+
+            # Compute the sun position
+            azimuth, altitude = get_sun_position(
+                lat,
+                lon,
+                s2_dates,
+                utc_times,
+                encode_azimuth=True,
+                encode_altitude=True)
+
+            # Ensure the Sentinel_metadata group exists
+            s2_metadata = f[tile_name]['Sentinel_metadata']
+            extra = {
+                'S2_utc_time': np.array(utc_times, dtype="S"),  # ASCII (bytes)
+                'S2_sun_azimuth_cos': azimuth[0],
+                'S2_sun_azimuth_sin': azimuth[1],
+                'S2_sun_altitude': altitude}
+
+            # Save results as new datasets in the HDF5 file
+            for k, v in extra.items():
+                if k in s2_metadata:
+                    error_msg = (
+                        f"['{tile_name}']['Sentinel_metadata']['{k}'] already "
+                        f"exists in {h5_file_path}. If you want to overwrite "
+                        f"with new values, please set overwrite=True.")
+                    if overwrite:
+                        del s2_metadata[k]
+                    else:
+                        raise ValueError(error_msg)
+                s2_metadata.create_dataset(k, data=v)
+
+    return
 
 
 def func_slope(px, py):
@@ -486,7 +576,7 @@ class GEDIDataset(Dataset):
             self.norm_values = pickle.load(f)
 
         # Open the file handles
-        self.handles = {fname: h5py.File(join(self.h5_path, fname), 'r') for fname in self.index.keys()}
+        self.handles = {fname: h5py.File(join(self.h5_path, fname), 'r+') for fname in self.index.keys()}
 
         # Read the dictionary mapping S2 tiles and acquisition dates to
         # UTC times. This will be used for recovering the sun position
@@ -697,3 +787,22 @@ class GEDIDataset(Dataset):
         agbd = torch.from_numpy(np.array(agbd, dtype = np.float32)).to(torch.float)
 
         return data, agbd
+
+    def _precompute_s2_sun_position(self, overwrite=False, verbose=True):
+        """Add the Sentinel-2 UTC acquisition time and corresponding sun
+        position for each GEDI location to an already-existing AGBD HDF5
+        file.
+
+        Args:
+        - overwrite (bool): Whether the UTC times and sun position
+        information should be overwritten, if already found in the HDF5
+        - verbose (bool): Verbosity
+        """
+        # Iterate over all files
+        for fname in self.fnames:
+            add_s2_sun_position_to_h5(
+                join(self.h5_path, fname),
+                self.s2_tile_to_dates,
+                overwrite=overwrite,
+                verbose=verbose)
+        return
