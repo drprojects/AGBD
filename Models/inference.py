@@ -316,15 +316,29 @@ class Inference:
         """
 
         # Initialize the model
-        model = Net(model_name = self.arch, in_features = self.args.in_features, num_outputs = self.args.num_outputs, 
-                    channel_dims = self.args.channel_dims, max_pool = self.args.max_pool, downsample = None,
-                    leaky_relu = self.args.leaky_relu, patch_size = self.args.patch_size)
+        model = Net(
+            model_name=self.arch,
+            in_features=self.args.in_features,
+            num_outputs=self.args.num_outputs,
+            channel_dims=self.args.channel_dims,
+            max_pool=self.args.max_pool,
+            downsample=None,
+            leaky_relu=self.args.leaky_relu,
+            patch_size=self.args.patch_size)
         
-        model = Model(model, lr = self.args.lr, step_size = self.args.step_size, gamma = self.args.gamma, 
-                        patch_size = self.args.patch_size, downsample = self.args.downsample, 
-                        loss_fn = self.args.loss_fn)
+        model = Model(
+            model,
+            lr=self.args.lr,
+            step_size=self.args.step_size,
+            gamma=self.args.gamma,
+            patch_size=self.args.patch_size,
+            downsample=self.args.downsample,
+            loss_fn=self.args.loss_fn,
+            optimizer_cls=self.args.optimizer_cls)
     
-        state_dict = torch.load(join(self.paths['ckpt'], self.arch, f'{self.model_name}_best.ckpt'), map_location = torch.device('cpu'))['state_dict']
+        state_dict = torch.load(
+            join(self.paths['ckpt'], self.arch, f'{self.model_name}_best.ckpt'),
+            map_location=torch.device('cpu'))['state_dict']
         try: model.load_state_dict(state_dict) 
         except Exception as e:
             if self.arch == 'nico' :

@@ -10,6 +10,7 @@ Definition of the Model() Module, which is the wrapper module for all models.
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.optim as optim
 import pytorch_lightning as pl
 from loss import TrainLoss, RMSE
 
@@ -18,7 +19,7 @@ from loss import TrainLoss, RMSE
 
 class Model(pl.LightningModule):
 
-    def __init__(self, model, lr, step_size, gamma, patch_size, downsample, loss_fn):
+    def __init__(self, model, lr, step_size, gamma, patch_size, downsample, loss_fn, optimizer_cls='Adam'):
         """
         Args:
         - model (nn.Module): the model to train
@@ -28,7 +29,8 @@ class Model(pl.LightningModule):
         - patch_size (list): the size of the patches to extract, in pixels
         - downsample (bool): whether to downsample the patches from 10m resolution to 50m resolution
         - loss_fn (str): the loss function to use for the training.  (Only 'MSE' is currently supported.)
-        """ 
+        - optimizer_cls (str): the optimizer to use for the training.  (supports torch.optim classes.)
+        """
 
         super().__init__()
         self.model = model
@@ -45,6 +47,8 @@ class Model(pl.LightningModule):
             self.center = int(patch_size[0] // 2)
         
         self.loss_fn = loss_fn
+
+        self.optimizer_cls = optimizer_cls
 
         self.preds, self.val_preds, self.test_preds = [], [], []
         self.labels, self.val_labels, self.test_labels = [], [], []
@@ -171,5 +175,9 @@ class Model(pl.LightningModule):
                 self.log_dict({f'test/binned/best_rmse_{lb}-{ub}': rmse, "step": self.current_epoch})
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr = self.lr)
+        if hasattr(optim, self.optimizer_cls):
+            optimizer_cls = getattr(optim, self.optimizer_cls)
+        else:
+            raise ValueError(f"Optimizer '{self.optimizer_cls}' not found in torch.optim")
+        optimizer = optimizer_cls(self.model.parameters(), lr = self.lr)
         return [optimizer], [torch.optim.lr_scheduler.StepLR(optimizer, step_size = self.step_size, gamma = self.gamma)]

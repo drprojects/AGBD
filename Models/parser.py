@@ -57,6 +57,7 @@ def setup_parser():
     parser.add_argument("--arch",   required = True, type = str, help = 'Network architecture.')
     parser.add_argument("--model_idx", type = int, help = 'Model ID, within the ensemble.')
     parser.add_argument("--loss_fn", required = True, type = str, help = 'Which loss function to use for the training. Can be: `RMSE`, `GNLL`, `LNLL`. Not considered if `mt_weighting` is `uncertainty`.')
+    parser.add_argument("--optimizer_cls", required = True, type = str, help = 'Which optimizer to use for the training. Can be any class in `torch.optim`.')
 
     # inputs
     parser.add_argument("--latlon", type = str2bool, default = 'true', help = 'Whether to include `lon_1` and `lon_2` in the input features.')

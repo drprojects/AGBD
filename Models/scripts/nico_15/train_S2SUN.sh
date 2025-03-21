@@ -59,7 +59,11 @@ fi
 # Model parameters ###############################################################################################
 
 # Loss function
+# Loss function
 loss_fn='MSE' # can be one of 'MSE' or 'GNLL'
+
+# Optimizer
+optimizer_cls='Adam'
 
 # Architecture
 arch="nico"
@@ -178,6 +182,7 @@ python3 train.py --model_path $model_path \
                 --arch $arch \
                 --model_idx $MODEL_IDX \
                 --loss_fn $loss_fn \
+                --optimizer_cls $optimizer_cls \
                 --latlon $latlon \
                 --s2_dates $s2_sun \
                 --s2_sun $s2_sun \
