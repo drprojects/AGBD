@@ -664,9 +664,8 @@ class GEDIDataset(Dataset):
             
             # Sentinel-2 date
             if self.s2_dates:
-                s2_num_days = f[tile_name]['Sentinel_metadata']['S2_date'][idx]
-                s2_doy_cos, s2_doy_sin, s2_date = get_doy(s2_num_days, self.patch_size)
                 if self.s2_day:
+                    s2_num_days = f[tile_name]['Sentinel_metadata']['S2_date'][idx]
                     s2_num_days = np.full(
                         (self.patch_size[0], self.patch_size[1]),
                         s2_num_days).astype(np.float32)
@@ -676,30 +675,26 @@ class GEDIDataset(Dataset):
                         'min_max' if self.norm_strat == 'pct' else self.norm_strat)
                     data.extend([s2_num_days[..., np.newaxis]])
                 if self.s2_doy:
+                    s2_num_days = f[tile_name]['Sentinel_metadata']['S2_date'][idx]
+                    s2_doy_cos, s2_doy_sin, s2_date = get_doy(s2_num_days, self.patch_size)
                     data.extend([s2_doy_cos[..., np.newaxis], s2_doy_sin[..., np.newaxis]])
                 if self.s2_sun:
-                    utc_time = self.s2_tile_to_dates[tile_name][s2_date.strftime("%Y%m%d")]
-                    utc_time = datetime.strptime(utc_time, "%H%M%S").strftime("%H:%M:%S")
-                    azimuth, altitude = get_sun_position(
-                        lat,
-                        lon,
-                        s2_date.strftime("%Y-%m-%d"),
-                        utc_time,
-                        encode_azimuth=True,
-                        encode_altitude=True)
-                    az_cos_patch = np.full(
+                    azimuth_cos = f[tile_name]['Sentinel_metadata']['S2_sun_azimuth_cos'][idx]
+                    azimuth_sin = f[tile_name]['Sentinel_metadata']['S2_sun_azimuth_sin'][idx]
+                    altitude = f[tile_name]['Sentinel_metadata']['S2_sun_altitude'][idx]
+                    azimuth_cos_patch = np.full(
                         (self.patch_size[0], self.patch_size[1]),
-                        azimuth[0]).astype(np.float32)
-                    az_sin_patch = np.full(
+                        azimuth_cos).astype(np.float32)
+                    azimuth_sin_patch = np.full(
                         (self.patch_size[0], self.patch_size[1]),
-                        azimuth[1]).astype(np.float32)
-                    alt_patch = np.full(
+                        azimuth_sin).astype(np.float32)
+                    altitude_patch = np.full(
                         (self.patch_size[0], self.patch_size[1]),
                         altitude).astype(np.float32)
                     data.extend([
-                        az_cos_patch[..., np.newaxis],
-                        az_sin_patch[..., np.newaxis],
-                        alt_patch[..., np.newaxis]])
+                        azimuth_cos_patch[..., np.newaxis],
+                        azimuth_sin_patch[..., np.newaxis],
+                        altitude_patch[..., np.newaxis]])
 
         # Sentinel-1 bands
         if self.s1:
